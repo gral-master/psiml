@@ -2,6 +2,8 @@
   (:require [clojure.test :refer :all]
             [psiml.core :refer :all]))
 
-(deftest a-test
-  (testing "FIXME, I fail."
-    (is (= 0 1))))
+(deftest eval-lambda-simple
+  (testing "Evaluate a simple expression"
+    (let [e [:app [:abs "x" [:get "a" [:var "x"]]] [:struct {"a" [:var "y"]}]]
+          r [:var "y"]]
+      (is (= (eval-lambda e) r)))))
