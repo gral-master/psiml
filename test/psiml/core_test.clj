@@ -4,6 +4,6 @@
 
 (deftest eval-lambda-simple
   (testing "Evaluate a simple expression"
-    (let [e [:app [:abs "x" [:get "a" [:var "x"]]] [:rec {"a" [:var "y"]}]]
+    (let [e [:app [:abs "x" [:get "a" [:var "x"]]] [:struct {"a" [:var "y"]}]]
           r [:var "y"]]
       (is (= (eval-lambda e) r)))))
