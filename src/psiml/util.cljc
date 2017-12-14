@@ -1,4 +1,5 @@
-(ns psiml.util)
+(ns psiml.util
+  #?(:cljs (:require-macros psiml.util)))
 
 (defn by-two
   ([s] (by-two s nil))
