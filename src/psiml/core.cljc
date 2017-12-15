@@ -35,6 +35,10 @@
   "I don't do a whole lot ... yet."
   [& args]
   (let [e (p/string "(fn [n1] true)")]
-    (println e (t/expr e))))
+    (println e (t/expr e)))
+   (let [e1 (p/string "{:a 1 :b 1}")]
+    (println e1))
+  (let [e2 (p/string "(:l 5)")]
+    (println e2)))
 
 #?(:cljs (-main))
