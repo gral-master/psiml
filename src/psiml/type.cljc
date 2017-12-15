@@ -42,39 +42,110 @@
   [v env]
   [v env])
 
-(defn same-labels?
-  [m1 m2]
-  (= (into #{} (keys m1)) (into #{} (keys m2))))
+(declare unify-input)
+(declare unify-output)
 
-(defn unify
+(defn unify-input
   [t1 t2 env]
   (match [t1 t2]
+    [[:top] t] [t env]
+    [t [:top]] [t env]
+    [[:t b1] [:t b2]]
+    [(if (= b1 b2) [:t b1] [:meet [:t b1] [:t b2]]) env]
+    [[:struct tm1] [:struct tm2]]
+    (with-env env
+      t-m (#(reduce
+              (partial reduce (fn [[t-m env] [l t]]
+                                (if (contains? t-m l)
+                                  (with-env env
+                                    t (unify-input (t-m l) t)
+                                    (assoc t-m l t))
+                                  [(assoc t-m l t) env])))
+              [{} %]
+              [tm1 tm2]))
+      [:struct t-m])
+    [[:abs t1-out t1-in] [:abs t2-out t2-in]]
+    (with-env env
+      t-in (unify-input t1-in t2-in)
+      t-out (unify-output t1-out t2-out)
+      [:abs t-out t-in])
+    [[:rec t1] [:rec t2]]
+    (with-env env
+      t (unify-input t1 t2)
+      [:rec t])
+    :else [nil env]))
+
+(defn unify-output
+  [t1 t2 env]
+  (match [t1 t2]
+    [[:bot] t] [t env]
+    [t [:bot]] [t env]
+    [[:t b1] [:t b2]]
+    [(if (= b1 b2) [:t b1] [:join [:t b1] [:t b2]]) env]
+    [[:struct tm1] [:struct tm2]]
+    (with-env env
+      t-m (#(reduce (fn [[t-m env] [l t1]]
+                      (if-let [t2 (tm2 l)]
+                        (with-env env
+                          t (unify-output t1 t2)
+                          (assoc t-m l t))
+                        ([t-m env])))
+                    [{} %] tm1))
+      [:struct t-m])
     [[:abs t1-in t1-out] [:abs t2-in t2-out]]
     (with-env env
-      t-in (unify t1-in t2-in)
-      t-out (unify t1-out t2-out)
+      t-in (unify-input t1-in t2-in)
+      t-out (unify-output t1-out t2-out)
       [:abs t-in t-out])
     [[:rec t1] [:rec t2]]
     (with-env env
-      t (unify t1 t2)
+      t (unify-output t1 t2)
       [:rec t])
-    [[:struct tm1] [:struct tm2]]
+    :else [nil env]))
+
+(defn bi-unify
+  [t-in t-out env]
+  (match [t-in t-out]
+    [[:top] t] [t env]
+    [_ [:bot]] [[:bot] env]
+    [[:t a] [:t b]]
+    [(if (= a b) [:t a]) env]
+    [[:struct tm-in] [:struct tm-out]]
     (with-env env
-      _ (env-id (if (same-labels? tm1 tm2) ()))
-      t-m ((fn [env]
-             (reduce (fn [[t-m env] [l t1]]
-                       (let [t2 (tm2 l)]
-                         (with-env env
-                           t (unify t1 t2)
-                           (assoc t-m l t)))) [{} env] tm1)))
+      t-m (#(reduce (fn [[t-m env] [l t-in]]
+                      (if-let [t-out (tm-out l)]
+                        (with-env env
+                          t (bi-unify t-in t-out)
+                          (assoc t-m l t))
+                        [nil env]))
+                    [{} %]
+                    tm-in))
       [:struct t-m])
-    [[:t b1] [:t b2]] (if (= b1 b2) [[:t b1] env] [nil env])
+    [[:abs t-in-out t-in-in] [:abs t-out-in t-out-out]]
+    (with-env env
+      t-a (bi-unify t-out-in t-in-out)
+      t-b (bi-unify t-in-in t-out-out)
+      [:abs t-a t-b])
+    [[:rec t-in] [:rec t-out]]
+    [nil env] ; TODO
+    [[:meet t1-in t2-in] _]
+    (with-env env
+      t1 (bi-unify t1-in t-out)
+      t2 (bi-unify t2-in t-out)
+      t (unify-output t1 t2)
+      t)
+    [_ [:join t1-out t2-out]]
+    (with-env env
+      t1 (bi-unify t-in t1-out)
+      t2 (bi-unify t-in t2-out)
+      t (unify-output t1 t2)
+      t)
     :else [nil env]))
 
 (defn with-var
   [n f env]
   (let [shadow (env n)
-        [t-f env] (f (assoc env n [:t-var]))
+        [t-f env] (f (assoc env n [:top]))
         t-n (env n)]
     [[t-n t-f] (if shadow (assoc env n shadow) (dissoc env n))]))
 
@@ -90,9 +161,9 @@
      [:rec n e]
      (with-env env
        [t-n t-e] (with-var n #(expr e %))
-       t (unify t-n t-e)
+       t (unify-output t-n t-e)
        [:rec n t])
-     [:cst c] [(cond (integer? c) [:t :int]
+     [:lit c] [(cond (integer? c) [:t :int]
                      (or (true? c) (false? c)) [:t :bool])
                env]
      [:var n] [(env n) env]
@@ -103,11 +174,11 @@
        [t-in t-out] (env-id (match t1
                               [:abs a b] [a b]
                               :else nil))
-       t (unify t-in t2)
+       _ (bi-unify t-in t2)
        t-out)
      [:struct m]
      (with-env env
-       t-m #((reduce (fn [[t-m env] [l e]]
+       t-m (#(reduce (fn [[t-m env] [l e]]
                        (with-env env
                          t (expr e)
                          (assoc t-m l t))) [{} %] m))
