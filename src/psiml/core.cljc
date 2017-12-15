@@ -12,7 +12,7 @@
    (match expr
      [:abs n e] [:abs n (eval-expr e env)]
      [:rec n e] [:rec n (eval-expr e (conj env [n e]))]
-     [:cst c] [:cst c]
+     [:lit c] [:cst c]
      [:var n] (or (env n) [:var n])
      [:app e1 e2] (let [e2' (eval-expr e2 env)]
                     (or (match e1 [:abs n e1'] (eval-expr e1' (conj env [n e2'])))
@@ -26,7 +26,7 @@
 ;; 1 --> [:t :int]
 ;; true --> [:t :bool]
 ;; (fn [n1 n2] e) --> [:abs n1 [:abs n2 r(e)]]
-;; {l1 e1 l2 e2} --> [:struct {l1 r(e1) l2 r(e2)}]
+;; {:l1 e1 :l2 e2} --> [:struct {:l1 r(e1) :l2 r(e2)}]
 ;; (:l e) --> [:get l r(e)]
 ;; (let [n e1] e2) --> [:app [:abs n r(e2)] [:rec n r(e1)]]
 ;; (e1 e2) --> [:app r(e1) r(e2)]
@@ -35,10 +35,12 @@
   "I don't do a whole lot ... yet."
   [& args]
   (let [e (p/string "(fn [n1] true)")]
-    (println e (t/expr e)))
+    (println e))
    (let [e1 (p/string "{:a 1 :b 1}")]
     (println e1))
   (let [e2 (p/string "(:l 5)")]
-    (println e2)))
+    (println e2))
+  (let [e3 (p/string "(fn [label] {:label true})")]
+    (println e3)))
 
 #?(:cljs (-main))

@@ -11,21 +11,16 @@
   (cond 
     (seq? d)  
       (match d 
-      ;; abs
       (['fn [a] b] :seq) 
       (if (symbol? a) [:abs (keyword a) (data b)])
-      ;; get
       ([a b] :seq)
       (if (keyword? a) [:get (name a) (data b)]))
     (or (integer? d) (true? d) (false? d)) 
-      [:cst d]
-    ;; struct
+      [:lit d]
     (map? d)
-      [:struct (reduce #(conj %1 {(first %2) (data(second %2))}) {} d)]))
+      [:struct (reduce (fn [m [l v]](conj m {l (data v)})) {} d)]))
 
 (defn string
   "Parses concrete syntax from a string"
   [s]
   (data (read-string s)))
-
-(conj {} {(first [:a 1]) (second [:a 1])})
