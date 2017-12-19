@@ -13,34 +13,37 @@
            [:t-abs :x [:abs [:var :x] [:var :y]]] #{})
          #{:y})))
 
-(defn unifications?
+(defmacro unifications?
   [t1 t2 t-input t-output t-bi]
-  (or (= (meet t1 t2 {}) [t-input {}])
-      (= (join t1 t2 {}) [t-output {}])
-      (= (biunify t1 t2 {}) [t-bi {}])))
+  `(do (is (= (meet ~t1 ~t2 {}) [~t-input {}]))
+       (is (= (join ~t1 ~t2 {}) [~t-output {}]))
+       (is (= (first (first (biunify ~t1 ~t2 {}))) ~t-bi))))
+
+(defn unified?
+  [t]
+  (unifications? t t t t t))
 
 (deftest bi-unify-basetypes
-  (is (unifications? t-int t-bool
+  (unifications? t-int t-bool
                      [:meet t-int t-bool]
                      [:join t-int t-bool]
-                     nil))
-  (is (apply unifications? (repeat 5 t-int))))
+                     nil)
+  (unified? t-int))
 
 (deftest bi-unify-struct
-  (is (apply unifications?
-             (repeat 5 [:struct {:i t-int :b t-bool}])))
-  (is (unifications? [:struct {:i t-int :b t-bool}]
-                     [:struct {:b t-int :i t-bool}]
-                     [:struct {:i [:meet t-int t-bool]
-                               :b [:meet t-bool t-int]}]
-                     [:struct {:i [:join t-int t-bool]
-                               :b [:join t-bool t-int]}]
-                     nil))
-  (is (unifications? [:struct {:i t-int :b t-bool}]
-                     [:struct {:a t-bool :b t-bool :i t-int}]
-                     [:struct {:a t-bool :i t-int :b t-bool}]
-                     [:struct {:i t-int :b t-bool}]
-                     [:struct {:i t-int :b t-bool}])))
+  (unified? [:struct {:i t-int :b t-bool}])
+  (unifications? [:struct {:i t-int :b t-bool}]
+                 [:struct {:b t-int :i t-bool}]
+                 [:struct {:i [:meet t-int t-bool]
+                           :b [:meet t-bool t-int]}]
+                 [:struct {:i [:join t-int t-bool]
+                           :b [:join t-bool t-int]}]
+                 nil)
+  (unifications? [:struct {:a t-bool :b t-bool :i t-int}]
+                 [:struct {:i t-int :b t-bool}]
+                 [:struct {:a t-bool :i t-int :b t-bool}]
+                 [:struct {:i t-int :b t-bool}]
+                 [:struct {:i t-int :b t-bool}]))
 
 (deftest test-eq?
   (is (eq? [:t-abs :a [:var :a]]

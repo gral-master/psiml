@@ -176,7 +176,7 @@
                         (with-env env
                           t (join t1 t2)
                           (assoc t-m l t))
-                        ([t-m env])))
+                        [t-m env]))
                     [{} %] tm1))
       [:struct t-m])
     [[:abs t1-in t1-out] [:abs t2-in t2-out]]
@@ -296,27 +296,26 @@
 (defn eq?
   ([t1 t2] (eq? t1 t2 {}))
   ([t1 t2 vars]
-   (match [t1 t2]
-     [[:top] [:top]] true
-     [[:bot] [:bot]] true
-     [[:t b1] [:t b2]] (= b1 b2)
-     [[:var n1] [:var n2]] (= (vars n1) n2)
-     [[:struct tm1] [:struct tm2]]
-     (and (= (into #{} (keys tm1)) (into #{} (keys tm2)))
-          (reduce (fn [acc [l t1]]
-                    (and acc
-                         (let [t2 (tm2 l)] (eq? t1 t2 vars))))
-                  true tm1))
-     [[:abs a1 b1] [:abs a2 b2]]
-     (and (eq? a1 a2 vars)
-          (eq? b1 b2 vars))
-     [[:t-abs n1 t1'] [:t-abs n2 t2']]
-     (eq? t1' t2' (assoc vars n1 n2))
-     ;; [[:rec a1] [:rec a2]] (eq? [a1 env1] [a2 env2])
-     [[:meet a1 b1] [:meet a2 b2]]
-     (and (eq? a1 a2 vars)
-          (eq? b1 b2 vars))
-     [[:join a1 b1] [:join a2 b2]]
-     (and (eq? a1 a2 vars)
-          (eq? b1 b2 vars))
-     :else false)))
+   (let [every-eq? #(reduce (fn [vs [a b]]
+                              (or (eq? a b vs) (reduced false)))
+                            vars %)]
+     (match [t1 t2]
+       [[:top] [:top]] vars
+       [[:bot] [:bot]] vars
+       [[:t b1] [:t b2]] (if (= b1 b2) vars)
+       [[:var n1] [:var n2]] (if (contains? vars n1)
+                               (if (= (vars n1) n2) vars)
+                               (assoc vars n1 n2))
+       [[:struct tm1] [:struct tm2]]
+       (and (= (into #{} (keys tm1)) (into #{} (keys tm2)))
+            (every-eq? (map (fn [[l t1]] [t1 (tm2 l)]) tm1)))
+       [[:abs a1 b1] [:abs a2 b2]]
+       (every-eq? [[a1 a2] [b1 b2]])
+       [[:t-abs n1 t1'] [:t-abs n2 t2']]
+       (eq? t1' t2')
+       ;; [[:rec a1] [:rec a2]] (eq? [a1 env1] [a2 env2])
+       [[:meet a1 b1] [:meet a2 b2]]
+       (every-eq? [[a1 a2] [b1 b2]])
+       [[:join a1 b1] [:join a2 b2]]
+       (every-eq? [[a1 a2] [b1 b2]])
+       :else false))))
