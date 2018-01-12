@@ -84,6 +84,13 @@
                   (map (fn [[n' t']] [n' (sub-in t')]))
                   (into {})))))
 
+(defn bisubstitute-constraints
+  [n t-in t-out constraints]
+  (into []
+        (map (fn [[to ti]] [(bisubstitute-output n t-in t-out to)
+                            (bisubstitute-input n t-in t-out ti)])
+             constraints)))
+
 (defn replace-var-t
   "Replaces the type of the variable n with t,
   simply removes the variable if t is nil.
@@ -103,9 +110,8 @@
       [t-n t-f])))
 
 (defn new-t-var
-  [p f env]
-  (let [n (gensym p)]
-    (f [:var n] env)))
+  [p env]
+  [[:var (gensym p)] env])
 
 (defn free-vars
   ([t bound] (free-vars t bound #{}))
@@ -121,7 +127,8 @@
        [:abs a b] (collect [a b])
        [:t-abs n t'] (free-vars t' (conj bound n) res)
        [:meet a b] (collect [a b])
-       [:join a b] (collect [a b])))))
+       [:join a b] (collect [a b])
+       :else res))))
 
 (defn abstract-types ; TODO: polymorphism
   "Abstracts free type variables of t"
@@ -191,53 +198,45 @@
     :else [[:join t1 t2] env]))
 
 (defn biunify
-  "Biunifies t-out with t-in in the given environment.
-  We want the output to flow in the input.
-  Returns [[t-out' t-in'] env]."
-  [t-out t-in env]
-  (match [t-out t-in]
-    [t [:top]] [[t [:top]] env]
-    [[:bot] t] [[[:bot] t] env]
-    [_ [:var n]] ; TODO
-    (with-env env
-      _ (env-only #(bisubstitute-env n t-out t-out %))
-      [t-out t-out])
-    [[:var n] _] ; TODO
-    (with-env env
-      _ (env-only #(bisubstitute-env n t-in t-in %))
-      [t-in t-in])
-    [[:t a] [:t b]]
-    [(if (= a b) [[:t a] [:t b]]) env]
-    [[:struct tm-out] [:struct tm-in]]
-    (with-env env
-      [mo mi] (#(reduce (fn [[ms env] [l t-in]]
-                          (with-env env
-                            [mo mi] (env-id ms)
-                            t-out (env-id (tm-out l))
-                            [to ti] (biunify t-out t-in)
-                            [(assoc mo l to) (assoc mi l ti)]))
-                    [[{} {}] %]
-                    tm-in))
-      [[:struct mo] [:struct mi]])
-    [[:abs t-out-in t-out-out] [:abs t-in-out t-in-in]]
-    (with-env env
-      [tio toi] (biunify t-in-out t-out-in)
-      [too tii] (biunify t-out-out t-in-in)
-      [[:abs toi too] [:abs tio tii]])
-    ;; [[:rec t-in] [:rec t-out]] [nil env]
-    [_ [:meet t1-in t2-in]]
-    (with-env env
-      [to t1i] (biunify t-out t1-in)
-      [to t2i] (biunify to t2-in)
-      ti (meet t1i t2i)
-      [to ti])
-    [[:join t1-out t2-out] _]
-    (with-env env
-      [t1o ti] (biunify t1-out t-in)
-      [t2o ti] (biunify t2-out ti)
-      to (join t1o t2o)
-      [to ti])
-    :else [nil env]))
+  "Biunifies each constraint, for the output to flow in the input.
+  Applies the bisubstitutions on the output type t and
+  the negative environment env, returning [t env]."
+  [constraints t env]
+  (if-let [[t-out t-in] (peek constraints)]
+    (let [cs (pop constraints)
+          [cs t env]
+          (match [t-out t-in]
+            [_ [:top]] [cs t env]
+            [[:bot] _] [cs t env]
+            [[:t a] [:t b]]
+            (if (= a b) [cs t env] [[] nil env])
+            ;; TODO [[:var a] [:var a]] (recur cs t env)
+            [[:var a] _]
+            (let [[t-in env] (meet [:var a] t-in env)
+                  cs (bisubstitute-constraints a t-in t-out cs)
+                  t (bisubstitute-output a t-in t-out t)
+                  env (bisubstitute-env a t-in t-out env)]
+              [cs t env])
+            [_ [:var a]]
+            (let [[t-out env] (join [:var a] t-out env)
+                  cs (bisubstitute-constraints a t-in t-out cs)
+                  t (bisubstitute-output a t-in t-out t)
+                  env (bisubstitute-env a t-in t-out env)]
+              [cs t env])
+            [_ [:meet t1 t2]]
+            [(into cs [[t-out t1] [t-out t2]]) t env]
+            [[:join t1 t2] _]
+            [(into cs [[t1 t-in] [t2 t-in]]) t env]
+            [[:struct tm-out] [:struct tm-in]]
+            [(reduce (fn [cs [l ti]] (conj cs [(tm-out l) ti]))
+                           cs tm-in)
+                   t env]
+            [[:abs toi too] [:abs tio tii]]
+            [(into cs [[tio toi] [too tii]]) t env]
+            ;; [[:rec to] [:rec ti]]
+            :else [[] nil env])]
+      (recur cs t env))
+      [t env]))
 
 (defn expr
   "Types an expression"
@@ -261,12 +260,9 @@
      (with-env env
        t1 (expr e1)
        t2 (expr e2)
-       [t-abs _] (new-t-var
-                   "app"
-                   (fn [t? env] (biunify t1 [:abs t2 t?] env)))
-       t-out (env-id (match t-abs
-                       [:abs _ t-out] t-out))
-       t-out)
+       t? (new-t-var "app")
+       t? (biunify [[t1 [:abs t2 t?]]] t?)
+       t?)
      [:struct m]
      (with-env env
        t-m (#(reduce (fn [[t-m env] [l e]]
@@ -277,20 +273,20 @@
      [:get l e]
      (with-env env
        t (expr e)
-       [t-s _] (new-t-var
-                 "get"
-                 (fn [t? env] (biunify t [:struct {l t?}] env)))
-       t-out (env-id (match t-s
-                       [:struct {l t-out}] t-out))
-       t-out)
+       t? (new-t-var "get")
+       t? (biunify [[t [:struct {l t?}]]] t?)
+       t?)
      [:if e-test e-then e-else]
      (with-env env
        t-test (expr e-test)
        t-then (expr e-then)
        t-else (expr e-else)
-       _ (biunify t-test [:t :bool])
-       t (join t-then t-else)
-       t)
+       t? (new-t-var "if")
+       t? (biunify [[t-test [:t :bool]]
+                    [t-then t?]
+                    [t-else t?]]
+                   t?)
+       t?)
      :else [nil env])))
 
 (defn eq?
