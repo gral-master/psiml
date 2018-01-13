@@ -1,45 +1,18 @@
 (ns psiml.type
   "Types abstract syntax, producing typed abstract syntax"
   #?(:cljs (:require-macros psiml.type))
-  (:require [clojure.core.match :refer [match]]))
+  (:require [clojure.core.match :refer [match]]
+            [psiml.util :refer [debug flatten-kw merge-kw]]
+            [psiml.print :as prt]))
 
 ;; TODO: typed ast {:node n :type t}
 
-;; type environment: {:vars {name -> input type}
-;;                    :bound-t-vars #{name}}
+;; type environment: {name -> input type}
 
-(defmacro trace
-  [sym env]
-  `(do (println ~(str sym) ~sym ~env) [~sym ~env]))
-
-(defn map-env
-  "Returns (f t env) if t is not nil, otherwise [t env]."
-  [[t env] f]
-  (if (nil? t) [t env] (f t env)))
-
-(defmacro with-env
-  "Passes an environment through a series of operations,
-  binding the results and returning a final value.
-
-  The operations are given the environment as an additional
-  argument and should return a value of the form [result new-env].
-  The binding itself is done using map-env, thus aborting the
-  series of operations after an error."
-  ([env r] `[~r ~env])
-  ([env b f & binds]
-   (let [senv (if (symbol? env) env (gensym))]
-     `(map-env (->> ~env ~f)
-               (fn [~b ~senv] (with-env ~senv ~@binds))))))
-
-(defn env-id
-  "Returns v without affecting the environment."
-  [v env]
-  [v env])
-
-(defn env-only
-  "Applies f to the environment, returning a dummy value."
-  [f env]
-  [:ok (f env)])
+(defn print-t-env
+  [[t env]]
+  (do (print "type: ") (prt/type t) (println)
+      (print "env: ") (prt/type [:struct env]) (println)))
 
 (declare bisubstitute-input)
 (declare bisubstitute-output)
@@ -56,7 +29,7 @@
       [:struct (into {} (map (fn [[l t]] [l (sub-in t)]) t-m))]
       [:abs t1 t2] [:abs (sub-out t1) (sub-in t2)]
       ;; [:rec t] [:rec (sub-in t)]
-      [:meet t1 t2] [:meet (sub-in t1) (sub-in t2)]
+      [:meet & ts] (into [:meet] (map sub-in ts))
       :else t)))
 
 (defn bisubstitute-output
@@ -71,7 +44,7 @@
       [:struct (into {} (map (fn [[l t]] [l (sub-out t)]) t-m))]
       [:abs t1 t2] [:abs (sub-in t1) (sub-out t2)]
       ;; [:rec t] [:rec (sub-out t)]
-      [:join t1 t2] [:join (sub-out t1) (sub-out t2)]
+      [:join & ts] (into [:join] (map sub-out ts))
       :else t)))
 
 (defn bisubstitute-env
@@ -79,10 +52,9 @@
   output occurences with t-out in the environment."
   [n t-in t-out env]
   (let [sub-in #(bisubstitute-input n t-in t-out %)]
-    (update env :vars
-            #(->> %
-                  (map (fn [[n' t']] [n' (sub-in t')]))
-                  (into {})))))
+    (->> env
+         (map (fn [[n' t']] [n' (sub-in t')]))
+         (into {}))))
 
 (defn bisubstitute-constraints
   [n t-in t-out constraints]
@@ -91,27 +63,12 @@
                             (bisubstitute-input n t-in t-out ti)])
              constraints)))
 
-(defn replace-var-t
-  "Replaces the type of the variable n with t,
-  simply removes the variable if t is nil.
-  Returns the replaced type."
-  [n t env]
-  (let [t-n ((:vars env) n)]
-    [t-n (update env :vars #(if t (assoc % n t) (dissoc % n)))]))
+(assoc-in {:x {:y 1}} [:x :y] 2)
 
-(defn with-var
-  "Introduces a new local variable n for the scope of f.
-  The result is of the form [[t-n t-f] env]."
-  [n f env]
-  (let [shadow (env n)]
-    (with-env env
-      t-f (#(f (assoc-in % [:vars n] [:var (gensym n)])))
-      t-n (replace-var-t n shadow)
-      [t-n t-f])))
-
-(defn new-t-var
-  [p env]
-  [[:var (gensym p)] env])
+(defn take-var-t
+  "Removes the type t of the variable n from env
+   and return [t env]."
+  [n env] [(or (env n) [:top]) (dissoc env n)])
 
 (defn free-vars
   ([t bound] (free-vars t bound #{}))
@@ -121,81 +78,91 @@
      (match t
        [:top] res
        [:bot] res
-       [:t _] res
+      [:t _] res
        [:var n] (if (bound n) res (conj res n))
        [:struct t-m] (collect (vals t-m))
        [:abs a b] (collect [a b])
        [:t-abs n t'] (free-vars t' (conj bound n) res)
-       [:meet a b] (collect [a b])
-       [:join a b] (collect [a b])
+       [:meet & ts] (collect ts)
+       [:join & ts] (collect ts)
        :else res))))
 
-(defn abstract-types ; TODO: polymorphism
-  "Abstracts free type variables of t"
-  [t env]
-  (let [nb (free-vars t (:bound-t-vars env))]
-    [(reduce (fn [t n] [:t-abs n t]) t nb) env]))
+(declare simplify-input)
+(declare simplify-output)
 
-(declare meet)
-(declare join)
+(defn simplify-input
+  [t]
+  (match t
+    [:abs to ti]
+    [:abs (simplify-output to) (simplify-input ti)]
+    [:struct m]
+    [:struct
+     (into {} (map (fn [[l ti]] [l (simplify-input ti)]) m))]
+    [:meet & ts]
+    (let [meets (flatten-kw :meet ts [])
+          meets (group-by #(first %) meets)
+          var (into #{} (:var meets))
+          basic (into #{} (:t meets))
+          abs (if-let [as (:abs meets)]
+                [(simplify-input
+                   [:abs
+                    (merge-kw :join (map (fn [[_ to _]] to) as))
+                    (merge-kw :meet (map (fn [[_ _ ti]] ti) as))])])
+          struct (if-let [ss (:struct meets)]
+                   [(simplify-input
+                      [:struct
+                       (apply merge-with
+                              (fn [a b] [:meet a b])
+                              (map (fn [[_ m]] m) ss))])])
+          not-var (concat basic abs struct)]
+      ;; FIXME:
+      ;; (or (merge-kw :meet (or (not-empty not-var) var)) [:top]))
+      (or (merge-kw :meet (concat not-var var)) [:top]))
+    :else t))
 
-(defn meet
-  [t1 t2 env]
-  (match [t1 t2]
-    [[:top] t] [t env]
-    [t [:top]] [t env]
-    [[:t b1] [:t b2]]
-    [(if (= b1 b2) [:t b1] [:meet [:t b1] [:t b2]]) env]
-    [[:struct tm1] [:struct tm2]]
-    (with-env env
-      t-m (#(reduce
-              (partial reduce (fn [[t-m env] [l t]]
-                                (if (contains? t-m l)
-                                  (with-env env
-                                    t (meet (t-m l) t)
-                                    (assoc t-m l t))
-                                  [(assoc t-m l t) env])))
-              [{} %]
-              [tm1 tm2]))
-      [:struct t-m])
-    [[:abs t1-out t1-in] [:abs t2-out t2-in]]
-    (with-env env
-      t-in (meet t1-in t2-in)
-      t-out (join t1-out t2-out)
-      [:abs t-out t-in])
-    ;; [[:rec t1'] [:rec t2']]
-    ;; (with-env env
-    ;;   t (meet t1' t2')
-    ;;  [:rec t])
-    :else [[:meet t1 t2] env]))
+(defn simplify-output
+  [t]
+  (match t
+    [:abs ti to]
+    [:abs (simplify-input ti) (simplify-output to)]
+    [:struct m]
+    [:struct
+     (into {} (map (fn [[l to]] [l (simplify-output to)]) m))]
+    [:join & ts]
+    (let [joins (flatten-kw :join ts [])
+          joins (group-by #(first %) joins)
+          var (into #{} (:var joins))
+          basic (into #{} (:t joins))
+          abs (if-let [as (:abs joins)]
+                [(simplify-output
+                   [:abs
+                    (merge-kw :meet (map (fn [[_ ti _]] ti) as))
+                    (merge-kw :join (map (fn [[_ _ to]] to) as))])])
+          struct (if-let [ss (:struct joins)]
+                   (let [ms (map (fn [[_ m]] m) ss)
+                         ls (apply clojure.set/intersection
+                                   (map #(into #{} (keys %)) ms))]
+                     [(simplify-output
+                        [:struct
+                         (apply merge-with
+                                (fn [a b] [:join a b])
+                                (map #(into {}
+                                            (filter
+                                              (fn [[l _]] (ls l))
+                                              %))
+                                     ms))])]))
+          not-var (concat basic abs struct)]
+      ;; FIXME
+      ;; (or (merge-kw :join (or (not-empty not-var) var)) [:bot]))
+      (or (merge-kw :join (concat not-var var)) [:bot]))
+    :else t))
 
-(defn join
-  [t1 t2 env]
-  (match [t1 t2]
-    [[:bot] t] [t env]
-    [t [:bot]] [t env]
-    [[:t b1] [:t b2]]
-    [(if (= b1 b2) [:t b1] [:join [:t b1] [:t b2]]) env]
-    [[:struct tm1] [:struct tm2]]
-    (with-env env
-      t-m (#(reduce (fn [[t-m env] [l t1]]
-                      (if-let [t2 (tm2 l)]
-                        (with-env env
-                          t (join t1 t2)
-                          (assoc t-m l t))
-                        [t-m env]))
-                    [{} %] tm1))
-      [:struct t-m])
-    [[:abs t1-in t1-out] [:abs t2-in t2-out]]
-    (with-env env
-      t-in (meet t1-in t2-in)
-      t-out (join t1-out t2-out)
-      [:abs t-in t-out])
-    ;; [[:rec t1'] [:rec t2']]
-    ;; (with-env env
-    ;;   t (unify-output t1' t2')
-    ;;  [:rec t])
-    :else [[:join t1 t2] env]))
+(defn simplify
+  [[t env]]
+  [(simplify-output t)
+   (->> env
+        (map (fn [[n t]] [n (simplify-input t)]))
+        (into {}))])
 
 (defn biunify
   "Biunifies each constraint, for the output to flow in the input.
@@ -212,21 +179,21 @@
             (if (= a b) [cs t env] [[] nil env])
             ;; TODO [[:var a] [:var a]] (recur cs t env)
             [[:var a] _]
-            (let [[t-in env] (meet [:var a] t-in env)
+            (let [t-in [:meet [:var a] t-in]
                   cs (bisubstitute-constraints a t-in t-out cs)
                   t (bisubstitute-output a t-in t-out t)
                   env (bisubstitute-env a t-in t-out env)]
               [cs t env])
             [_ [:var a]]
-            (let [[t-out env] (join [:var a] t-out env)
+            (let [t-out [:join [:var a] t-out]
                   cs (bisubstitute-constraints a t-in t-out cs)
                   t (bisubstitute-output a t-in t-out t)
                   env (bisubstitute-env a t-in t-out env)]
               [cs t env])
-            [_ [:meet t1 t2]]
-            [(into cs [[t-out t1] [t-out t2]]) t env]
-            [[:join t1 t2] _]
-            [(into cs [[t1 t-in] [t2 t-in]]) t env]
+            [_ [:meet & ts]]
+            [(into cs (map (fn [t] [t-out t]) ts)) t env]
+            [[:join & ts] _]
+            [(into cs (map (fn [t] [t t-in]) ts)) t env]
             [[:struct tm-out] [:struct tm-in]]
             [(reduce (fn [cs [l ti]] (conj cs [(tm-out l) ti]))
                            cs tm-in)
@@ -238,56 +205,64 @@
       (recur cs t env))
       [t env]))
 
+(defn env-meet
+  [envs]
+  (apply merge-with (fn [a b] [:meet a b]) envs))
+
 (defn expr
   "Types an expression"
   ([e] (expr e {}))
   ([exp env]
-   (match exp
-     [:abs n e]
-     (with-env env
-       [t-n t-e] (with-var n #(expr e %))
-       [:abs t-n t-e])
-     ;; [:rec n e]
-     ;; (with-env env
-     ;;   [t-n t-e] (with-var n #(expr e %))
-     ;;   t (biunify t-e t-n)
-     ;;   [:rec n t])
-     [:lit c] [(cond (integer? c) [:t :int]
-                     (or (true? c) (false? c)) [:t :bool])
-               env]
-     [:var n] [((:vars env) n) env]
-     [:app e1 e2]
-     (with-env env
-       t1 (expr e1)
-       t2 (expr e2)
-       t? (new-t-var "app")
-       t? (biunify [[t1 [:abs t2 t?]]] t?)
-       t?)
-     [:struct m]
-     (with-env env
-       t-m (#(reduce (fn [[t-m env] [l e]]
-                       (with-env env
-                         t (expr e)
-                         (assoc t-m l t))) [{} %] m))
-       [:struct t-m])
-     [:get l e]
-     (with-env env
-       t (expr e)
-       t? (new-t-var "get")
-       t? (biunify [[t [:struct {l t?}]]] t?)
-       t?)
-     [:if e-test e-then e-else]
-     (with-env env
-       t-test (expr e-test)
-       t-then (expr e-then)
-       t-else (expr e-else)
-       t? (new-t-var "if")
-       t? (biunify [[t-test [:t :bool]]
-                    [t-then t?]
-                    [t-else t?]]
-                   t?)
-       t?)
-     :else [nil env])))
+   (let [te
+     (simplify (match exp
+       [:abs n e]
+       (if-let [[t-e env] (expr e env)]
+         (if-let [[t-n env] (take-var-t n env)]
+           [[:abs t-n t-e] env]))
+       ;; [:rec n e]
+       ;; (with-env env
+       ;;   [t-n t-e] (with-var n #(expr e %))
+       ;;   t (biunify t-e t-n)
+       ;;   [:rec n t])
+       [:lit c] [(cond (integer? c) [:t :int]
+                       (or (true? c) (false? c)) [:t :bool])
+                 env]
+       [:var n] (if-let [t (env n)]
+                  [t env]
+                  (let [t [:var (gensym "t")]]
+                    [t (assoc env n t)]))
+       [:app e1 e2]
+       (if-let [[t1 env1] (expr e1 env)]
+         (if-let [[t2 env2] (expr e2 env)]
+           (let [t? [:var (gensym "a")]]
+             (biunify [[t1 [:abs t2 t?]]]
+                      t? (env-meet [env1 env2])))))
+       [:struct m]
+       (if-let [t-env-m (reduce
+                          (fn [t-env-m [l e]]
+                               (if-let [t-env (expr e env)]
+                                 (assoc t-env-m l t-env)
+                                 (reduced nil)))
+                          {} m)]
+         [[:struct (into {} (map (fn [[l [t _]]] [l t]) t-env-m))]
+          (env-meet (map #(second %) (vals t-env-m)))])
+       [:get l e]
+       (if-let [[t env] (expr e env)]
+         (let [t? [:var (gensym "g")]]
+           (biunify [[t [:struct {l t?}]]]
+                    t? env)))
+       [:if e-test e-then e-else]
+       (if-let [[t-test env-test] (expr e-test env)]
+         (if-let [[t-then env-then] (expr e-then env)]
+           (if-let [[t-else env-else] (expr e-else env)]
+             (let [t? [:var (gensym "i")]]
+               (biunify [[t-test [:t :bool]]
+                         [t-then t?]
+                         [t-else t?]]
+                        t?
+                        (env-meet [env-test env-then env-else]))))))
+       :else nil))]
+     (do (prt/expr exp) (println) (print-t-env te) te))))
 
 (defn eq?
   ([t1 t2] (eq? t1 t2 {}))
@@ -310,8 +285,8 @@
        [[:t-abs n1 t1'] [:t-abs n2 t2']]
        (eq? t1' t2')
        ;; [[:rec a1] [:rec a2]] (eq? [a1 env1] [a2 env2])
-       [[:meet a1 b1] [:meet a2 b2]]
-       (every-eq? [[a1 a2] [b1 b2]])
-       [[:join a1 b1] [:join a2 b2]]
-       (every-eq? [[a1 a2] [b1 b2]])
+       [[:meet & ts1] [:meet & ts2]]
+       (every-eq? (map (fn [t1 t2] [t1 t2]) ts1 ts2))
+       [[:join & ts1] [:join & ts2]]
+       (every-eq? (map (fn [t1 t2] [t1 t2]) ts1 ts2))
        :else false))))

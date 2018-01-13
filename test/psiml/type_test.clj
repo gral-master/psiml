@@ -19,27 +19,27 @@
 
 (defn is-meet?
   [a b r]
-  (is (= (first (meet a b {})) r)))
+  (is (= (simplify-input [:meet a b]) r)))
 
 (deftest test-meet
   (is-meet? t-int t-int t-int)
-  (is-meet? t-int t-bool [:meet t-int t-bool])
+  (is-meet? t-int t-bool [:meet t-bool t-int])
   (is-meet? s-iibb s-iibb s-iibb)
   (is-meet? s-iibb s-ibbi
-            [:struct {:i [:meet t-int t-bool]
+            [:struct {:i [:meet t-bool t-int]
                       :b [:meet t-bool t-int]}])
   (is-meet? s-abiibb s-iibb s-abiibb))
 
 (defn is-join?
   [a b r]
-  (is (= (first (join a b {})) r)))
+  (is (= (simplify-output [:join a b]) r)))
 
 (deftest test-join
   (is-join? t-int t-int t-int)
-  (is-join? t-int t-bool [:join t-int t-bool])
+  (is-join? t-int t-bool [:join t-bool t-int])
   (is-join? s-iibb s-iibb s-iibb)
   (is-join? s-iibb s-ibbi
-            [:struct {:i [:join t-int t-bool]
+            [:struct {:i [:join t-bool t-int]
                       :b [:join t-bool t-int]}])
   (is-join? s-abiibb s-iibb s-iibb))
 
@@ -62,8 +62,8 @@
 (defn is-typed?
   ([e t] (is-typed? e t {}))
   ([e t vars]
-   (let [[t' env] (expr e {:vars vars :bound-t-vars #{}})]
-     (is (eq? (first (abstract-types t' env)) t)))))
+   (let [[t' _] (expr e vars)]
+     (is (eq? t' t)))))
 
 (deftest test-expr
   (is-typed? [:lit 1] t-int)
@@ -75,7 +75,7 @@
 (def id [:abs :x [:var :x]])
 
 (deftest expr-id
-  (is-typed? id [:t-abs :a [:abs [:var :a] [:var :a]]]))
+  (is-typed? id [:abs [:var :a] [:var :a]]))
 
 (deftest select-int-bool
   (is-typed? [:abs :p
@@ -87,7 +87,7 @@
              [:abs [:abs t-int t-bool]
               [:abs t-int
                [:abs t-bool
-                [:join t-int t-bool]]]]
+                [:join t-bool t-int]]]]
              {:int-id [:abs t-int t-int]
               :bool-id [:abs t-bool t-bool]}))
 
@@ -98,12 +98,10 @@
                 [:if [:app [:var :p] [:var :v]]
                  [:var :v]
                  [:var :d]]]]]
-             [:t-abs :v
-              [:t-abs :d
-               [:abs [:abs [:var :v] t-bool]
-                [:abs [:var :v]
-                 [:abs [:var :d]
-                  [:join [:var :v] [:var :d]]]]]]]))
+             [:abs [:abs [:var :v] t-bool]
+              [:abs [:var :v]
+               [:abs [:var :d]
+                [:join [:var :v] [:var :d]]]]]))
 
 ;; NEXT TARGET:
 ;; (deftest meet-and
