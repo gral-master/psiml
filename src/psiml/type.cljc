@@ -87,6 +87,7 @@
        [:join & ts] (collect ts)
        :else res))))
 
+;; FIXME: simplification
 (declare simplify-input)
 (declare simplify-output)
 
@@ -113,11 +114,8 @@
                       [:struct
                        (apply merge-with
                               (fn [a b] [:meet a b])
-                              (map (fn [[_ m]] m) ss))])])
-          not-var (concat basic abs struct)]
-      ;; FIXME:
-      ;; (or (merge-kw :meet (or (not-empty not-var) var)) [:top]))
-      (or (merge-kw :meet (concat not-var var)) [:top]))
+                              (map (fn [[_ m]] m) ss))])])]
+      (or (merge-kw :meet (concat var basic abs struct)) [:top]))
     :else t))
 
 (defn simplify-output
@@ -150,11 +148,8 @@
                                             (filter
                                               (fn [[l _]] (ls l))
                                               %))
-                                     ms))])]))
-          not-var (concat basic abs struct)]
-      ;; FIXME
-      ;; (or (merge-kw :join (or (not-empty not-var) var)) [:bot]))
-      (or (merge-kw :join (concat not-var var)) [:bot]))
+                                     ms))])]))]
+      (or (merge-kw :join (concat var basic abs struct)) [:bot]))
     :else t))
 
 (defn simplify

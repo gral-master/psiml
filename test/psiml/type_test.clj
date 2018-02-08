@@ -91,6 +91,14 @@
              {:int-id [:abs t-int t-int]
               :bool-id [:abs t-bool t-bool]}))
 
+(deftest int-or-bool
+  (is-typed? [:if [:var :t] [:lit 1] [:lit true]]
+             [:join [:t :bool] [:t :int]]))
+
+(deftest a-or-b
+  (is-typed? [:if [:var :t] [:var :a] [:var :b]]
+             [:join [:var :a] [:var :b]]))
+
 (deftest select
   (is-typed? [:abs :p
               [:abs :v
